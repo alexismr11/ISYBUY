@@ -42,25 +42,49 @@ FICHIER_CONFIG_AGENCE = "CONFIG_FOURNISSEUR_AGENCE.csv"
 FICHIERS_REQUIS = (FICHIER_FOURNISSEUR, FICHIER_GROUPE, FICHIER_CONFIG_AGENCE)
 
 # Variantes d'en-têtes acceptées par colonne canonique (comparaison insensible
-# à la casse et aux accents). À ajuster si le schéma réel diffère.
+# à la casse et aux accents, mais PAS aux séparateurs : "CODE_POSTAL" et
+# "CODEPOSTAL" sont deux variantes distinctes à lister toutes les deux).
+#
+# Les noms en tête de chaque liste (fourn_id, fourn_nom, siret,
+# codetva_intracom, adresse1/2/3, codepostal, ville, fourn_ownergrp,
+# groupe_id, groupe_nom) sont les en-têtes RÉELS observés le 2026-09-17 sur
+# Data_SFTP/FOURNISSEUR.csv et Data_SFTP/GROUPE.csv (SharePoint, site
+# TEAM-iBAT77-F.CUSTOMERSUCCESS, 80. ANALYTICS/Dashboard_CARE/Data_SFTP/).
+# Les noms restants sont des hypothèses conservées au cas où un autre export
+# (client, environnement) utilise un schéma différent.
+#
+# Point non confirmé : CONFIG_FOURNISSEUR_AGENCE.csv fait ~191 Mo en
+# production, trop volumineux pour être ouvert depuis cette session — son
+# en-tête réel n'a pas pu être vérifié. Les alias ci-dessous restent des
+# hypothèses pour ce fichier.
+#
+# Point à trancher avec un développeur : FOURNISSEUR.csv porte à la fois
+# fourn_owner (probablement l'utilisateur créateur de la fiche) et
+# fourn_ownergrp (probablement le groupe/tenant propriétaire, celui qui
+# correspond à groupe_id dans GROUPE.csv). C'est fourn_ownergrp qui est
+# mappé sur id_groupe ci-dessous ; à confirmer avant usage en production,
+# car une confusion entre les deux casserait la distinction public/privé
+# (§5 de reference/modele.md) et donc l'étanchéité entre clients.
 ALIAS_COLONNES = {
     "fournisseur": {
-        "id": ["ID_FOURNISSEUR", "ID", "FOURNISSEUR_ID"],
-        "raison_sociale": ["RAISON_SOCIALE", "NOM", "LIBELLE"],
+        "id": ["FOURN_ID", "ID_FOURNISSEUR", "ID", "FOURNISSEUR_ID"],
+        "raison_sociale": ["FOURN_NOM", "RAISON_SOCIALE", "NOM", "LIBELLE"],
         "siret": ["SIRET", "N_SIRET", "NUM_SIRET"],
-        "tva": ["TVA_INTRACOM", "TVA_INTRACOMMUNAUTAIRE", "N_TVA", "NUM_TVA"],
-        "adresse": ["ADRESSE", "ADRESSE1", "ADRESSE_1"],
-        "code_postal": ["CODE_POSTAL", "CP"],
+        "tva": ["CODETVA_INTRACOM", "TVA_INTRACOM", "TVA_INTRACOMMUNAUTAIRE", "N_TVA", "NUM_TVA"],
+        "adresse": ["ADRESSE1", "ADRESSE", "ADRESSE_1"],
+        "adresse2": ["ADRESSE2", "ADRESSE_2"],
+        "adresse3": ["ADRESSE3", "ADRESSE_3"],
+        "code_postal": ["CODEPOSTAL", "CODE_POSTAL", "CP"],
         "ville": ["VILLE"],
-        "id_groupe": ["ID_GROUPE", "GROUPE_ID", "ID_TENANT"],
+        "id_groupe": ["FOURN_OWNERGRP", "ID_GROUPE", "GROUPE_ID", "ID_TENANT"],
         "date_creation": ["DATE_CREATION", "DATE_CREATE", "CREATED_AT"],
     },
     "groupe": {
-        "id": ["ID_GROUPE", "ID"],
-        "nom": ["NOM_GROUPE", "NOM", "RAISON_SOCIALE"],
+        "id": ["GROUPE_ID", "ID_GROUPE", "ID"],
+        "nom": ["GROUPE_NOM", "NOM_GROUPE", "NOM", "RAISON_SOCIALE"],
     },
     "config_agence": {
-        "id_fournisseur": ["ID_FOURNISSEUR", "FOURNISSEUR_ID"],
+        "id_fournisseur": ["FOURN_ID", "ID_FOURNISSEUR", "FOURNISSEUR_ID"],
         "id_agence": ["ID_AGENCE", "AGENCE_ID"],
         "code_erp": ["CODE_ERP", "CODE_ERP_AGENCE"],
     },
@@ -175,14 +199,23 @@ def charger_fournisseurs(dossier: Path) -> Tuple[List[Fournisseur], Dict[str, st
     for _, row in df_fourn.iterrows():
         fid = str(row[col_f["id"]]).strip()
         id_groupe = str(row[col_f["id_groupe"]]).strip() if col_f.get("id_groupe") and pd.notna(row.get(col_f["id_groupe"])) else None
-        if id_groupe == "":
+        if id_groupe in ("", "0", None):
+            # "0" est le sentinel observé en production pour « aucun groupe propriétaire »
+            # (fiche du référentiel partagé) — au même titre qu'une valeur vide.
             id_groupe = None
+
+        adresse = " ".join(
+            str(row.get(col_f[c], "") or "").strip()
+            for c in ("adresse", "adresse2", "adresse3")
+            if col_f.get(c) and pd.notna(row.get(col_f[c]))
+        ).strip()
+
         f = Fournisseur(
             id=fid,
             raison_sociale=str(row.get(col_f.get("raison_sociale"), "") or "").strip(),
             siret_brut=row.get(col_f.get("siret")),
             tva_brut=row.get(col_f.get("tva")),
-            adresse=str(row.get(col_f.get("adresse"), "") or "").strip(),
+            adresse=adresse,
             code_postal=str(row.get(col_f.get("code_postal"), "") or "").strip(),
             ville=str(row.get(col_f.get("ville"), "") or "").strip(),
             id_groupe=id_groupe,
